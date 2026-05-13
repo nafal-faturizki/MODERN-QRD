@@ -50,7 +50,9 @@ impl Schema {
             return Err(SchemaError::TruncatedSection);
         }
 
-        let payload_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        let mut payload_len_bytes = [0u8; 4];
+        payload_len_bytes.copy_from_slice(&bytes[0..4]);
+        let payload_len = u32::from_le_bytes(payload_len_bytes) as usize;
         let total_len = 4usize
             .checked_add(payload_len)
             .ok_or(SchemaError::SectionTooLarge)?;
@@ -424,7 +426,9 @@ fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, SchemaError> {
     let end = cursor.checked_add(2).ok_or(SchemaError::TruncatedSection)?;
     let slice = bytes.get(*cursor..end).ok_or(SchemaError::TruncatedSection)?;
     *cursor = end;
-    Ok(u16::from_le_bytes(slice.try_into().unwrap()))
+    let mut out = [0u8; 2];
+    out.copy_from_slice(slice);
+    Ok(u16::from_le_bytes(out))
 }
 
 fn read_bytes<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8], SchemaError> {
@@ -439,11 +443,11 @@ fn parse_schema_field(bytes: &[u8], cursor: &mut usize) -> Result<SchemaField, S
     let name_bytes = read_bytes(bytes, cursor, name_len)?;
     let name = str::from_utf8(name_bytes).map_err(|_| SchemaError::InvalidUtf8)?.to_string();
 
-    let logical_type_id = LogicalTypeId::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
-    let nullability = Nullability::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
-    let encoding_hint = EncodingHint::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
-    let compression_hint = CompressionHint::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
-    let encryption_id = EncryptionId::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
+    let logical_type_id = LogicalTypeId::try_from(read_bytes(bytes, cursor, 1)?[0])?;
+    let nullability = Nullability::try_from(read_bytes(bytes, cursor, 1)?[0])?;
+    let encoding_hint = EncodingHint::try_from(read_bytes(bytes, cursor, 1)?[0])?;
+    let compression_hint = CompressionHint::try_from(read_bytes(bytes, cursor, 1)?[0])?;
+    let encryption_id = EncryptionId::try_from(read_bytes(bytes, cursor, 1)?[0])?;
 
     let metadata_count = read_u16(bytes, cursor)? as usize;
     let mut metadata = Vec::with_capacity(metadata_count);

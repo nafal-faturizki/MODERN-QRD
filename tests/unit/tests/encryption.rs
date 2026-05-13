@@ -43,8 +43,8 @@ fn hkdf_derivation() {
     let salt: [u8; 32] = [2u8; 32];
     let info = b"column_key_1";
 
-    let key1 = Cipher::derive_key(&master_key, Some(&salt), info);
-    let key2 = Cipher::derive_key(&master_key, Some(&salt), info);
+    let key1 = Cipher::derive_key(&master_key, Some(&salt), info).unwrap();
+    let key2 = Cipher::derive_key(&master_key, Some(&salt), info).unwrap();
 
     // Same inputs should produce same key
     assert_eq!(&key1[..], &key2[..]);

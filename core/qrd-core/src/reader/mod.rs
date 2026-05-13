@@ -2,9 +2,14 @@
 //!
 //! Implements footer-first parsing and optional partial column reads.
 
+use crate::column_chunk::{ColumnChunkHeader, COLUMN_CHUNK_ENCRYPTION_NONCE_SIZE, COLUMN_CHUNK_ENCRYPTION_TAG_SIZE, COLUMN_CHUNK_HEADER_BASE_SIZE};
+use crate::compression::{self, CompressionId};
+use crate::encoding::{self, EncodingId};
+use crate::encryption::Cipher;
 use crate::error::{Error, Result};
-use crate::file_footer::{decode_footer_envelope, FooterContent, FOOTER_LENGTH_FIELD_SIZE};
+use crate::file_footer::{decode_footer_envelope, FooterContent, FooterRowGroupEntry, FOOTER_LENGTH_FIELD_SIZE};
 use crate::file_header::{FileHeader, FILE_HEADER_SIZE};
+use crate::integrity;
 use crate::schema::Schema;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -21,6 +26,8 @@ pub struct FileReader<R: Read> {
     footer_total_rows: u64,
     /// Footer-extracted row group count
     footer_row_group_count: u16,
+    /// Row-group entries parsed from footer for offset-based access
+    footer_row_groups: Vec<FooterRowGroupEntry>,
 }
 
 impl<R: Read + Seek> FileReader<R> {
@@ -106,6 +113,7 @@ impl<R: Read + Seek> FileReader<R> {
             file_size,
             footer_total_rows,
             footer_row_group_count,
+            footer_row_groups: footer.row_groups,
         })
     }
 
@@ -134,20 +142,48 @@ impl<R: Read + Seek> FileReader<R> {
         self.footer_row_group_count
     }
 
+    /// Returns row-group offsets parsed from footer.
+    pub fn row_group_offsets(&self) -> Vec<u64> {
+        self.footer_row_groups
+            .iter()
+            .map(|entry| entry.byte_offset)
+            .collect()
+    }
+
     /// Reads a column chunk from the file at given offset.
     /// Returns (ColumnChunkHeader, raw_chunk_bytes).
     /// Note: encrypted column chunks are not automatically decrypted here.
-    pub fn read_column_chunk_at(&mut self, offset: u64) -> Result<(crate::column_chunk::ColumnChunkHeader, Vec<u8>)> {
+    pub fn read_column_chunk_at(&mut self, offset: u64) -> Result<(ColumnChunkHeader, Vec<u8>)> {
         self.reader
             .seek(SeekFrom::Start(offset))
             .map_err(|_| Error::FileTooSmall { file_size: self.file_size })?;
 
-        let mut base_buf = vec![0u8; crate::column_chunk::COLUMN_CHUNK_HEADER_BASE_SIZE];
+        let mut base_buf = vec![0u8; COLUMN_CHUNK_HEADER_BASE_SIZE];
         self.reader
             .read_exact(&mut base_buf)
             .map_err(|_| Error::FileTooSmall { file_size: self.file_size })?;
 
-        let (header, _) = crate::column_chunk::ColumnChunkHeader::parse(&base_buf)
+        let encryption_id = base_buf[2];
+        let mut header_buf = base_buf;
+        if encryption_id == 0x01 {
+            let fixed_len = COLUMN_CHUNK_ENCRYPTION_NONCE_SIZE + COLUMN_CHUNK_ENCRYPTION_TAG_SIZE + 2;
+            let mut fixed = vec![0u8; fixed_len];
+            self.reader
+                .read_exact(&mut fixed)
+                .map_err(|_| Error::FileTooSmall { file_size: self.file_size })?;
+
+            let key_len_offset = fixed_len - 2;
+            let key_id_len = u16::from_le_bytes([fixed[key_len_offset], fixed[key_len_offset + 1]]) as usize;
+            let mut key_id = vec![0u8; key_id_len];
+            self.reader
+                .read_exact(&mut key_id)
+                .map_err(|_| Error::FileTooSmall { file_size: self.file_size })?;
+
+            header_buf.extend_from_slice(&fixed);
+            header_buf.extend_from_slice(&key_id);
+        }
+
+        let (header, _) = ColumnChunkHeader::parse(&header_buf)
             .map_err(|_| Error::InvalidColumnChunkHeader)?;
 
         let mut payload = vec![0u8; header.compressed_size as usize];
@@ -156,6 +192,65 @@ impl<R: Read + Seek> FileReader<R> {
             .map_err(|_| Error::FileTooSmall { file_size: self.file_size })?;
 
         Ok((header, payload))
+    }
+
+    /// Reads a column chunk and validates/decodes payload into logical encoded bytes.
+    /// For encrypted chunks, `master_key` must be provided.
+    pub fn read_decoded_column_chunk_at(
+        &mut self,
+        offset: u64,
+        master_key: Option<&[u8; 32]>,
+    ) -> Result<Vec<u8>> {
+        let (header, payload, stored_checksum) = self.read_column_chunk_with_checksum_at(offset)?;
+
+        let compressed = if header.encryption_id == 0x01 {
+            let encryption = header.encryption.as_ref().ok_or(Error::InvalidColumnChunkHeader)?;
+            let key = master_key.ok_or(Error::KeyDerivationFailed)?;
+            let mut ciphertext_with_tag = payload;
+            ciphertext_with_tag.extend_from_slice(&encryption.auth_tag);
+            let cipher = Cipher::new(key);
+            cipher.decrypt(&encryption.nonce, &ciphertext_with_tag)?
+        } else {
+            payload
+        };
+
+        let decompressed = compression::decompress(
+            CompressionId::try_from(header.compression_id)
+                .map_err(|_| Error::UnknownCompression { id: header.compression_id })?,
+            &compressed,
+        )?;
+
+        if decompressed.len() != header.uncompressed_size as usize {
+            return Err(Error::InvalidColumnChunkHeader);
+        }
+
+        let decoded = encoding::decode(
+            EncodingId::try_from(header.encoding_id)
+                .map_err(|_| Error::UnknownEncoding { id: header.encoding_id })?,
+            &decompressed,
+        )?;
+
+        let computed_checksum = integrity::crc32_bytes(&decoded);
+        if computed_checksum != stored_checksum {
+            return Err(Error::ChunkChecksumMismatch);
+        }
+
+        Ok(decoded)
+    }
+
+    fn read_column_chunk_with_checksum_at(
+        &mut self,
+        offset: u64,
+    ) -> Result<(ColumnChunkHeader, Vec<u8>, u32)> {
+        let (header, payload) = self.read_column_chunk_at(offset)?;
+
+        let mut checksum_bytes = [0u8; 4];
+        self.reader
+            .read_exact(&mut checksum_bytes)
+            .map_err(|_| Error::FileTooSmall { file_size: self.file_size })?;
+        let checksum = u32::from_le_bytes(checksum_bytes);
+
+        Ok((header, payload, checksum))
     }
 }
 

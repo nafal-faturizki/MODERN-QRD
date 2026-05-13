@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
+use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
 use std::convert::TryFrom;
@@ -49,8 +50,7 @@ impl Cipher {
     /// Generates a new random 12-byte nonce.
     pub fn generate_nonce() -> [u8; 12] {
         let mut nonce = [0u8; 12];
-        let mut rng = rand::thread_rng();
-        rng.fill_bytes(&mut nonce);
+        OsRng.fill_bytes(&mut nonce);
         nonce
     }
 
@@ -59,13 +59,13 @@ impl Cipher {
         master_key: &[u8; 32],
         salt: Option<&[u8; 32]>,
         info: &[u8],
-    ) -> [u8; 32] {
+    ) -> Result<[u8; 32]> {
         let salt_ref = salt.map(|s| s.as_slice());
         let hkdf = Hkdf::<Sha256>::new(salt_ref, master_key);
         let mut key = [0u8; 32];
         hkdf.expand(info, &mut key)
-            .expect("HKDF expand should not fail with 32-byte output");
-        key
+            .map_err(|_| Error::KeyDerivationFailed)?;
+        Ok(key)
     }
 
     /// Encrypts plaintext using AES-256-GCM.

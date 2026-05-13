@@ -46,12 +46,12 @@ pub fn encode(config: &EccConfig, data_chunks: &[&[u8]]) -> Result<Vec<Vec<u8>>>
     // Ensure all chunks have the same length
     for chunk in data_chunks {
         if chunk.len() != chunk_len {
-            return Err(Error::FileTooSmall { file_size: 0 });
+            return Err(Error::EccShardLengthMismatch);
         }
     }
 
     let rs = RS::new(config.k, config.parity_count())
-        .map_err(|_| Error::FileTooSmall { file_size: 0 })?;
+        .map_err(|_| Error::EccReconstructionFailed)?;
 
     // Convert to OwnedShards by copying data
     let mut all_chunks: Vec<Vec<u8>> = data_chunks.iter().map(|&c| c.to_vec()).collect();
@@ -65,7 +65,7 @@ pub fn encode(config: &EccConfig, data_chunks: &[&[u8]]) -> Result<Vec<Vec<u8>>>
     let mut chunk_refs: Vec<&mut [u8]> = all_chunks.iter_mut().map(|c| c.as_mut_slice()).collect();
 
     rs.encode(&mut chunk_refs)
-        .map_err(|_| Error::FileTooSmall { file_size: 0 })?;
+        .map_err(|_| Error::EccReconstructionFailed)?;
 
     // Return only parity chunks
     Ok(all_chunks[config.k..].to_vec())
@@ -81,31 +81,34 @@ pub fn decode(
         return Err(Error::FileTooSmall { file_size: 0 });
     }
 
-    let chunk_len = chunks
-        .iter()
-        .find_map(|c| c.as_ref().map(|v| v.len()))
-        .unwrap_or(0);
+    let chunk_len = match chunks.iter().find_map(|c| c.as_ref().map(|v| v.len())) {
+        Some(len) => len,
+        None => return Err(Error::EccReconstructionFailed),
+    };
+
+    for shard in chunks.iter().flatten() {
+        if shard.len() != chunk_len {
+            return Err(Error::EccShardLengthMismatch);
+        }
+    }
 
     let rs = RS::new(config.k, config.parity_count())
-        .map_err(|_| Error::FileTooSmall { file_size: 0 })?;
+        .map_err(|_| Error::EccReconstructionFailed)?;
 
     // Wrap chunks in Option for reconstruction (as required by library)
     let mut chunk_opts: Vec<Option<Vec<u8>>> = chunks.to_vec();
 
-    // Fill missing chunks with zeros for reconstruction
-    for chunk in &mut chunk_opts {
-        if chunk.is_none() {
-            *chunk = Some(vec![0u8; chunk_len]);
+    rs.reconstruct(&mut chunk_opts)
+        .map_err(|_| Error::EccReconstructionFailed)?;
+
+    let mut out = Vec::with_capacity(config.k);
+    for maybe_chunk in chunk_opts.into_iter().take(config.k) {
+        let chunk = maybe_chunk.ok_or(Error::EccReconstructionFailed)?;
+        if chunk.len() != chunk_len {
+            return Err(Error::EccShardLengthMismatch);
         }
+        out.push(chunk);
     }
 
-    rs.reconstruct(&mut chunk_opts)
-        .map_err(|_| Error::FileTooSmall { file_size: 0 })?;
-
-    // Return data chunks only
-    Ok(chunk_opts
-        .into_iter()
-        .take(config.k)
-        .filter_map(|c| c)
-        .collect())
+    Ok(out)
 }

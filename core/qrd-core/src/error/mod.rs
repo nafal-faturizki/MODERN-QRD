@@ -32,12 +32,22 @@ pub enum Error {
 	UnknownEncoding { id: u8 },
 	#[error("unknown compression id: {id:#04x}")]
 	UnknownCompression { id: u8 },
+	#[error("encoding data is truncated: {algorithm}")]
+	EncodingTruncated { algorithm: &'static str },
+	#[error("encoding data is invalid: {algorithm}")]
+	EncodingInvalid { algorithm: &'static str },
 	#[error("authentication failed")]
 	AuthenticationFailed,
+	#[error("key derivation failed")]
+	KeyDerivationFailed,
 	#[error("chunk checksum mismatch")]
 	ChunkChecksumMismatch,
 	#[error("footer checksum mismatch")]
 	FooterChecksumMismatch,
+	#[error("ecc shard length mismatch")]
+	EccShardLengthMismatch,
+	#[error("ecc reconstruction failed")]
+	EccReconstructionFailed,
 	#[error("schema error: {0}")]
 	Schema(#[from] crate::schema::SchemaError),
 }

@@ -1,4 +1,8 @@
-use qrd_core::{StreamingWriter, SchemaBuilder, SchemaField, LogicalTypeId, Nullability};
+use qrd_core::{
+    ColumnChunkHeader, FileReader, LogicalTypeId, Nullability, SchemaBuilder, SchemaField,
+    StreamingWriter,
+};
+use qrd_core::row_group::ROW_GROUP_HEADER_SIZE;
 use std::io::Cursor;
 
 #[test]
@@ -133,4 +137,70 @@ fn e2e_writer_prevents_write_after_finish() {
     
     // After finish, writer cannot be used anymore (it's moved)
     // So this test just verifies that finish() succeeds
+}
+
+#[test]
+fn e2e_writer_reader_roundtrip_decoded_first_chunk() {
+    let schema = SchemaBuilder::new()
+        .field(SchemaField::new("id", LogicalTypeId::Int32, Nullability::Required))
+        .build()
+        .expect("Schema build failed");
+
+    let buffer = Cursor::new(Vec::new());
+    let mut writer = StreamingWriter::new(buffer, schema).expect("Writer creation failed");
+
+    for value in [10i32, 20i32, 30i32] {
+        writer
+            .write_row(vec![value.to_le_bytes().to_vec()])
+            .expect("write row should succeed");
+    }
+
+    let cursor = writer.finish().expect("finish should succeed");
+    let mut reader = FileReader::new(Cursor::new(cursor.into_inner())).expect("reader should open");
+
+    let row_group_offsets = reader.row_group_offsets();
+    assert_eq!(row_group_offsets.len(), 1);
+
+    let chunk_offset = row_group_offsets[0] + ROW_GROUP_HEADER_SIZE as u64;
+    let decoded = reader
+        .read_decoded_column_chunk_at(chunk_offset, None)
+        .expect("decoded read should succeed");
+
+    let expected = [10i32, 20i32, 30i32]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<u8>>();
+    assert_eq!(decoded, expected);
+}
+
+#[test]
+fn e2e_reader_detects_chunk_checksum_mismatch() {
+    let schema = SchemaBuilder::new()
+        .field(SchemaField::new("id", LogicalTypeId::Int32, Nullability::Required))
+        .build()
+        .expect("Schema build failed");
+
+    let buffer = Cursor::new(Vec::new());
+    let mut writer = StreamingWriter::new(buffer, schema).expect("Writer creation failed");
+    writer
+        .write_row(vec![1i32.to_le_bytes().to_vec()])
+        .expect("write should succeed");
+
+    let cursor = writer.finish().expect("finish should succeed");
+    let mut bytes = cursor.into_inner();
+
+    let row_group_offset = qrd_core::file_header::FILE_HEADER_SIZE as u64;
+    let chunk_offset = row_group_offset + ROW_GROUP_HEADER_SIZE as u64;
+    let header_start = chunk_offset as usize;
+
+    let (header, consumed) = ColumnChunkHeader::parse(&bytes[header_start..]).expect("chunk header parse");
+    let checksum_offset = header_start + consumed + header.compressed_size as usize;
+    bytes[checksum_offset] ^= 0xFF;
+
+    let mut reader = FileReader::new(Cursor::new(bytes)).expect("reader should open");
+    let err = reader
+        .read_decoded_column_chunk_at(chunk_offset, None)
+        .expect_err("checksum mismatch should fail");
+
+    assert!(matches!(err, qrd_core::Error::ChunkChecksumMismatch));
 }

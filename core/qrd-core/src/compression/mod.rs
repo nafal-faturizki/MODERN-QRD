@@ -63,27 +63,30 @@ pub mod zstd_codec {
 /// LZ4 Frame compression codec (0x02).
 pub mod lz4_codec {
     use crate::error::Result;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
+    use lz4::Decoder;
+    use lz4::EncoderBuilder;
     use std::io::Write;
 
-    /// Compresses data using LZ4 Frame format (via flate2 as placeholder).
+    /// Compresses data using LZ4 Frame format.
     pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut encoder = EncoderBuilder::new()
+            .level(4)
+            .build(Vec::new())
+            .map_err(|_| crate::error::Error::FileTooSmall { file_size: 0 })?;
         encoder
             .write_all(data)
             .map_err(|_| crate::error::Error::FileTooSmall { file_size: 0 })?;
-        encoder
-            .finish()
-            .map_err(|_| crate::error::Error::FileTooSmall { file_size: 0 })
+        let (compressed, finish_result) = encoder.finish();
+        finish_result.map_err(|_| crate::error::Error::FileTooSmall { file_size: 0 })?;
+        Ok(compressed)
     }
 
     /// Decompresses LZ4 Frame data.
     pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
-        use flate2::read::GzDecoder;
         use std::io::Read;
 
-        let mut decoder = GzDecoder::new(data);
+        let mut decoder = Decoder::new(data)
+            .map_err(|_| crate::error::Error::FileTooSmall { file_size: 0 })?;
         let mut out = Vec::new();
         decoder
             .read_to_end(&mut out)

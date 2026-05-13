@@ -122,11 +122,11 @@ impl ColumnChunkHeader {
             compression_id: bytes[1],
             encryption_id,
             chunk_flags: bytes[3],
-            compressed_size: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-            uncompressed_size: u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
-            null_count: u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
-            row_count_chunk: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
-            row_offset: u64::from_le_bytes(bytes[20..28].try_into().unwrap()),
+            compressed_size: read_u32_le(bytes, 4),
+            uncompressed_size: read_u32_le(bytes, 8),
+            null_count: read_u32_le(bytes, 12),
+            row_count_chunk: read_u32_le(bytes, 16),
+            row_offset: read_u64_le(bytes, 20),
             encryption: None,
         };
 
@@ -149,7 +149,7 @@ impl ColumnChunkHeader {
             auth_tag.copy_from_slice(&bytes[consumed..consumed + COLUMN_CHUNK_ENCRYPTION_TAG_SIZE]);
             consumed += COLUMN_CHUNK_ENCRYPTION_TAG_SIZE;
 
-            let key_id_len = u16::from_le_bytes(bytes[consumed..consumed + 2].try_into().unwrap()) as usize;
+            let key_id_len = read_u16_le(bytes, consumed) as usize;
             consumed += 2;
 
             if bytes.len() < consumed + key_id_len {
@@ -170,4 +170,22 @@ impl ColumnChunkHeader {
 
         Ok((header, consumed))
     }
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> u16 {
+    let mut out = [0u8; 2];
+    out.copy_from_slice(&bytes[offset..offset + 2]);
+    u16::from_le_bytes(out)
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut out = [0u8; 4];
+    out.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(out)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(out)
 }

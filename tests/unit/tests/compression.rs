@@ -19,6 +19,15 @@ fn zstd_roundtrip() {
 }
 
 #[test]
+fn lz4_roundtrip() {
+    let data = b"hello world! This is a test. ".repeat(10);
+    let data_flat = data.as_slice();
+    let compressed = compression::lz4_codec::compress(data_flat).unwrap();
+    let decompressed = compression::lz4_codec::decompress(&compressed).unwrap();
+    assert_eq!(&decompressed[..], data_flat);
+}
+
+#[test]
 fn adaptive_select_high_entropy() {
     let random_data: Vec<u8> = (0..100).map(|i| (i * 7) as u8).collect();
     let codec = compression::adaptive_select(&random_data);
