@@ -6,8 +6,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
 	#[error("file is too small: {file_size} bytes")]
 	FileTooSmall { file_size: u64 },
+	#[error("invalid footer version: {version}")]
+	InvalidFooterVersion { version: u16 },
 	#[error("unsupported major version: {major_version}")]
 	UnsupportedMajorVersion { major_version: u16 },
+	#[error("header row group count mismatch: header={header}, footer={footer}")]
+	HeaderRowGroupCountMismatch { header: u32, footer: u32 },
 	#[error("invalid file header magic")]
 	InvalidMagic,
 	#[error("header checksum mismatch")]

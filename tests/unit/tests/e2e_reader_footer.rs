@@ -1,33 +1,38 @@
-use qrd_core::{FileHeader, encode_footer_envelope, FileReader};
+use qrd_core::{
+    encode_footer_envelope, FileHeader, FileReader, FooterContent, FooterRowGroupEntry,
+    LogicalTypeId, Nullability, Schema, SchemaField,
+};
 use std::io::Cursor;
 
 #[test]
 fn e2e_reader_parses_footer_metadata() {
-    // Build a fake file: header + payload + footer_envelope
-    let header = FileHeader::new(1, 0, [0u8; 8], 0, 0, 0);
+    let schema = Schema::builder()
+        .field(SchemaField::new("device_id", LogicalTypeId::Enum, Nullability::Required))
+        .build()
+        .expect("schema should build");
+
+    let schema_id = schema.schema_id().expect("schema id should compute");
+
+    let header = FileHeader::new(1, 0, schema_id, 0, 2, 0);
     let header_bytes = header.to_bytes();
 
-    // Footer body: rg_count (u16), total_rows (u64), schema_version (u16), then per-rg: offset(u64), row_count(u32)
-    let rg_count: u16 = 3;
-    let total_rows: u64 = 7;
-    let schema_version: u16 = 1;
+    let footer = FooterContent {
+        footer_version: 1,
+        schema,
+        row_groups: vec![
+            FooterRowGroupEntry { byte_offset: 32, row_count: 3 },
+            FooterRowGroupEntry { byte_offset: 32, row_count: 4 },
+        ],
+        statistics_flag: 0,
+        statistics_bytes: Vec::new(),
+        encryption_metadata: None,
+        schema_signature: None,
+        file_metadata: Vec::new(),
+    };
 
-    let mut body = Vec::new();
-    body.extend_from_slice(&rg_count.to_le_bytes());
-    body.extend_from_slice(&total_rows.to_le_bytes());
-    body.extend_from_slice(&schema_version.to_le_bytes());
-
-    // Add three row groups (offset placeholders + row counts)
-    body.extend_from_slice(&0u64.to_le_bytes());
-    body.extend_from_slice(&3u32.to_le_bytes());
-    body.extend_from_slice(&0u64.to_le_bytes());
-    body.extend_from_slice(&3u32.to_le_bytes());
-    body.extend_from_slice(&0u64.to_le_bytes());
-    body.extend_from_slice(&1u32.to_le_bytes());
-
+    let body = footer.to_bytes().expect("footer serialization should succeed");
     let footer_envelope = encode_footer_envelope(&body).expect("encode footer failed");
 
-    // Create full file bytes
     let mut file_bytes = Vec::new();
     file_bytes.extend_from_slice(&header_bytes);
     file_bytes.extend_from_slice(b"PAYLOAD_PLACEHOLDER");
@@ -36,6 +41,6 @@ fn e2e_reader_parses_footer_metadata() {
     let cursor = Cursor::new(file_bytes);
     let reader = FileReader::new(cursor).expect("FileReader::new failed");
 
-    assert_eq!(reader.total_rows(), total_rows);
-    assert_eq!(reader.footer_row_group_count(), rg_count);
+    assert_eq!(reader.total_rows(), 7);
+    assert_eq!(reader.footer_row_group_count(), 2);
 }

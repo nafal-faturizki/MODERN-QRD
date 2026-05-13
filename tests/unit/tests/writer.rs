@@ -1,4 +1,5 @@
 use qrd_core::{StreamingWriter, Schema, SchemaField, LogicalTypeId, Nullability};
+use std::io::Cursor;
 
 #[test]
 fn creates_streaming_writer_with_schema() {
@@ -8,7 +9,7 @@ fn creates_streaming_writer_with_schema() {
         .build()
         .expect("schema should build");
 
-    let buffer = Vec::new();
+    let buffer = Cursor::new(Vec::new());
     let writer = StreamingWriter::new(buffer, schema.clone())
         .expect("writer should initialize");
 
@@ -25,7 +26,7 @@ fn writes_multiple_rows_and_flushes() {
         .build()
         .expect("schema should build");
 
-    let buffer = Vec::new();
+    let buffer = Cursor::new(Vec::new());
     let mut writer = StreamingWriter::new(buffer, schema)
         .expect("writer should initialize");
 
@@ -46,7 +47,7 @@ fn finalizes_with_footer() {
         .build()
         .expect("schema should build");
 
-    let buffer = Vec::new();
+    let buffer = Cursor::new(Vec::new());
     let mut writer = StreamingWriter::new(buffer, schema)
         .expect("writer should initialize");
 
@@ -67,7 +68,7 @@ fn rejects_writes_after_finish() {
         .build()
         .expect("schema should build");
 
-    let buffer = Vec::new();
+    let buffer = Cursor::new(Vec::new());
     let writer = StreamingWriter::new(buffer, schema)
         .expect("writer should initialize");
 

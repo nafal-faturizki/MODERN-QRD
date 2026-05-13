@@ -16,7 +16,7 @@ pub mod writer;
 pub use error::{Error, Result};
 pub use column_chunk::{ChunkEncryptionMetadata, ColumnChunkHeader};
 pub use file_header::FileHeader;
-pub use file_footer::{decode_footer_body, encode_footer_envelope};
+pub use file_footer::{decode_footer_body, decode_footer_envelope, encode_footer_envelope, FooterContent, FooterRowGroupEntry};
 pub use row_group::RowGroupHeader;
 pub use writer::StreamingWriter;
 pub use reader::FileReader;

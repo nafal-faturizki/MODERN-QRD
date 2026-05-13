@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
+use std::str;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +43,38 @@ impl Schema {
         let mut schema_id = [0u8; 8];
         schema_id.copy_from_slice(&fingerprint[..8]);
         Ok(schema_id)
+    }
+
+    pub fn parse_footer_schema_section(bytes: &[u8]) -> Result<(Self, usize), SchemaError> {
+        if bytes.len() < 4 {
+            return Err(SchemaError::TruncatedSection);
+        }
+
+        let payload_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        let total_len = 4usize
+            .checked_add(payload_len)
+            .ok_or(SchemaError::SectionTooLarge)?;
+
+        if bytes.len() < total_len {
+            return Err(SchemaError::TruncatedSection);
+        }
+
+        let payload = &bytes[4..total_len];
+        let mut cursor = 0usize;
+
+        let schema_version = read_u16(payload, &mut cursor)?;
+        let field_count = read_u16(payload, &mut cursor)? as usize;
+
+        let mut fields = Vec::with_capacity(field_count);
+        for _ in 0..field_count {
+            fields.push(parse_schema_field(payload, &mut cursor)?);
+        }
+
+        if cursor != payload.len() {
+            return Err(SchemaError::InvalidFooterSchemaPayload);
+        }
+
+        Ok((Schema { schema_version, fields }, total_len))
     }
 
     fn serialize_footer_schema_payload(&self) -> Result<Vec<u8>, SchemaError> {
@@ -271,6 +304,10 @@ pub enum SchemaError {
     TooManyFields,
     #[error("schema section exceeds the U32 length limit")]
     SectionTooLarge,
+    #[error("schema footer section is truncated")]
+    TruncatedSection,
+    #[error("schema footer payload is invalid")]
+    InvalidFooterSchemaPayload,
     #[error("field name exceeds the U16 length limit")]
     FieldNameTooLong,
     #[error("field contains too many metadata entries to fit into footer encoding")]
@@ -279,4 +316,155 @@ pub enum SchemaError {
     MetadataKeyTooLong,
     #[error("metadata value exceeds the U16 length limit")]
     MetadataValueTooLong,
+    #[error("schema footer contains invalid utf-8")]
+    InvalidUtf8,
+    #[error("unknown logical type id: {id:#04x}")]
+    UnknownLogicalTypeId { id: u8 },
+    #[error("unknown nullability id: {id:#04x}")]
+    UnknownNullabilityId { id: u8 },
+    #[error("unknown encoding hint id: {id:#04x}")]
+    UnknownEncodingHintId { id: u8 },
+    #[error("unknown compression hint id: {id:#04x}")]
+    UnknownCompressionHintId { id: u8 },
+    #[error("unknown encryption id: {id:#04x}")]
+    UnknownEncryptionId { id: u8 },
+}
+
+impl TryFrom<u8> for LogicalTypeId {
+    type Error = SchemaError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x01 => Ok(Self::Boolean),
+            0x02 => Ok(Self::Int8),
+            0x03 => Ok(Self::Int16),
+            0x04 => Ok(Self::Int32),
+            0x05 => Ok(Self::Int64),
+            0x06 => Ok(Self::UInt8),
+            0x07 => Ok(Self::UInt16),
+            0x08 => Ok(Self::UInt32),
+            0x09 => Ok(Self::UInt64),
+            0x0A => Ok(Self::Float32),
+            0x0B => Ok(Self::Float64),
+            0x10 => Ok(Self::Timestamp),
+            0x11 => Ok(Self::Date),
+            0x12 => Ok(Self::Time),
+            0x13 => Ok(Self::Duration),
+            0x20 => Ok(Self::Utf8String),
+            0x21 => Ok(Self::Enum),
+            0x22 => Ok(Self::Uuid),
+            0x23 => Ok(Self::Blob),
+            0x24 => Ok(Self::Decimal),
+            0x30 => Ok(Self::Struct),
+            0x31 => Ok(Self::Array),
+            0x32 => Ok(Self::Map),
+            0xFF => Ok(Self::Any),
+            id => Err(SchemaError::UnknownLogicalTypeId { id }),
+        }
+    }
+}
+
+impl TryFrom<u8> for Nullability {
+    type Error = SchemaError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::Required),
+            0x01 => Ok(Self::Optional),
+            0x02 => Ok(Self::Repeated),
+            id => Err(SchemaError::UnknownNullabilityId { id }),
+        }
+    }
+}
+
+impl TryFrom<u8> for EncodingHint {
+    type Error = SchemaError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::Plain),
+            0x01 => Ok(Self::Rle),
+            0x02 => Ok(Self::BitPacked),
+            0x03 => Ok(Self::DeltaBinary),
+            0x04 => Ok(Self::DeltaByteArray),
+            0x05 => Ok(Self::ByteStreamSplit),
+            0x06 => Ok(Self::DictionaryRle),
+            id => Err(SchemaError::UnknownEncodingHintId { id }),
+        }
+    }
+}
+
+impl TryFrom<u8> for CompressionHint {
+    type Error = SchemaError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::None),
+            0x01 => Ok(Self::Zstd),
+            0x02 => Ok(Self::Lz4Frame),
+            0x03 => Ok(Self::Snappy),
+            id => Err(SchemaError::UnknownCompressionHintId { id }),
+        }
+    }
+}
+
+impl TryFrom<u8> for EncryptionId {
+    type Error = SchemaError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::None),
+            0x01 => Ok(Self::Aes256Gcm),
+            id => Err(SchemaError::UnknownEncryptionId { id }),
+        }
+    }
+}
+
+fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, SchemaError> {
+    let end = cursor.checked_add(2).ok_or(SchemaError::TruncatedSection)?;
+    let slice = bytes.get(*cursor..end).ok_or(SchemaError::TruncatedSection)?;
+    *cursor = end;
+    Ok(u16::from_le_bytes(slice.try_into().unwrap()))
+}
+
+fn read_bytes<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8], SchemaError> {
+    let end = cursor.checked_add(len).ok_or(SchemaError::TruncatedSection)?;
+    let slice = bytes.get(*cursor..end).ok_or(SchemaError::TruncatedSection)?;
+    *cursor = end;
+    Ok(slice)
+}
+
+fn parse_schema_field(bytes: &[u8], cursor: &mut usize) -> Result<SchemaField, SchemaError> {
+    let name_len = read_u16(bytes, cursor)? as usize;
+    let name_bytes = read_bytes(bytes, cursor, name_len)?;
+    let name = str::from_utf8(name_bytes).map_err(|_| SchemaError::InvalidUtf8)?.to_string();
+
+    let logical_type_id = LogicalTypeId::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
+    let nullability = Nullability::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
+    let encoding_hint = EncodingHint::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
+    let compression_hint = CompressionHint::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
+    let encryption_id = EncryptionId::try_from(*read_bytes(bytes, cursor, 1)?.first().unwrap())?;
+
+    let metadata_count = read_u16(bytes, cursor)? as usize;
+    let mut metadata = Vec::with_capacity(metadata_count);
+
+    for _ in 0..metadata_count {
+        let key_len = read_u16(bytes, cursor)? as usize;
+        let key = str::from_utf8(read_bytes(bytes, cursor, key_len)?).map_err(|_| SchemaError::InvalidUtf8)?.to_string();
+
+        let value_len = read_u16(bytes, cursor)? as usize;
+        let value = str::from_utf8(read_bytes(bytes, cursor, value_len)?).map_err(|_| SchemaError::InvalidUtf8)?.to_string();
+
+        metadata.push(SchemaMetadataEntry { key, value });
+    }
+
+    Ok(SchemaField {
+        name,
+        logical_type_id,
+        nullability,
+        encoding_hint,
+        compression_hint,
+        encryption_id,
+        metadata,
+    })
 }

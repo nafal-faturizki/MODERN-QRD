@@ -1,10 +1,20 @@
-use qrd_core::{FileHeader, ColumnChunkHeader, encode_footer_envelope, FileReader};
+use qrd_core::{
+    encode_footer_envelope, ColumnChunkHeader, FileHeader, FileReader, FooterContent, FooterRowGroupEntry,
+    LogicalTypeId, Nullability, Schema, SchemaField,
+};
 use std::io::Cursor;
 
 #[test]
 fn e2e_reader_reads_column_chunk_at_offset() {
+    let schema = Schema::builder()
+        .field(SchemaField::new("device_id", LogicalTypeId::Enum, Nullability::Required))
+        .build()
+        .expect("schema should build");
+
+    let schema_id = schema.schema_id().expect("schema id should compute");
+
     // Build a fake column chunk header and payload
-    let mut chunk_header = ColumnChunkHeader::new_plain(
+    let chunk_header = ColumnChunkHeader::new_plain(
         0x00, // encoding plain
         0x00, // compression none
         0x00, // flags
@@ -19,7 +29,7 @@ fn e2e_reader_reads_column_chunk_at_offset() {
     let payload = b"hello world".to_vec();
 
     // File layout: header(32) + some payload + column_chunk_header + payload + footer
-    let header = FileHeader::new(1, 0, [0u8;8], 0, 0, 0);
+    let header = FileHeader::new(1, 0, schema_id, 0, 1, 0);
     let header_bytes_32 = header.to_bytes();
 
     let mut file_bytes = Vec::new();
@@ -30,12 +40,17 @@ fn e2e_reader_reads_column_chunk_at_offset() {
     file_bytes.extend_from_slice(&header_bytes);
     file_bytes.extend_from_slice(&payload);
 
-    // Simple footer body minimal
-    let mut body = Vec::new();
-    body.extend_from_slice(&0u16.to_le_bytes());
-    body.extend_from_slice(&0u64.to_le_bytes());
-    body.extend_from_slice(&1u16.to_le_bytes());
-    let footer = encode_footer_envelope(&body).unwrap();
+    let footer = FooterContent {
+        footer_version: 1,
+        schema,
+        row_groups: vec![FooterRowGroupEntry { byte_offset: chunk_offset, row_count: 3 }],
+        statistics_flag: 0,
+        statistics_bytes: Vec::new(),
+        encryption_metadata: None,
+        schema_signature: None,
+        file_metadata: Vec::new(),
+    };
+    let footer = encode_footer_envelope(&footer.to_bytes().unwrap()).unwrap();
     file_bytes.extend_from_slice(&footer);
 
     let cursor = Cursor::new(file_bytes);
