@@ -1725,15 +1725,15 @@ Roadmap QRD terorganisir per phase berdasarkan kematangan, bukan tanggal. Setiap
 ### Phase 1 — Foundation (Current)
 
 **Exit criteria:**
-- [x] Rust core engine dengan semua 7 encoding algorithms
-- [x] ZSTD dan LZ4 compression, adaptive selection
-- [x] AES-256-GCM per-column encryption dengan HKDF
-- [x] Reed-Solomon ECC
-- [x] CRC32 per-chunk dan per-footer
-- [x] C FFI layer (stable ABI)
-- [x] WASM target (browser + Node.js)
-- [x] Python, TypeScript, Go, Java SDKs
-- [x] Criterion benchmark suite
+- [ ] Rust core engine dengan semua 7 encoding algorithms
+- [ ] ZSTD dan LZ4 compression, adaptive selection
+- [ ] AES-256-GCM per-column encryption dengan HKDF
+- [ ] Reed-Solomon ECC
+- [ ] CRC32 per-chunk dan per-footer
+- [ ] C FFI layer (stable ABI)
+- [ ] WASM target (browser + Node.js)
+- [ ] Python, TypeScript, Go, Java SDKs
+- [ ] Criterion benchmark suite
 - [ ] Test suite mencapai 10.000 test cases
 - [ ] Fuzzing corpus: 100K+ corpus entries per target
 - [ ] Audit kriptografis oleh firma independen
