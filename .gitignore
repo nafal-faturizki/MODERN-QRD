@@ -1,0 +1,40 @@
+# Rust
+/target/
+**/*.rs.bk
+**/Cargo.lock
+
+# VSCode
+.vscode/
+
+# Devcontainer
+.devcontainer/
+
+# IDEs
+.idea/
+*.iml
+
+# macOS
+.DS_Store
+
+# Logs and temp
+*.log
+/tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Node
+node_modules/
+
+# Build artifacts
+*.profraw
+
+# Test artifacts
+/test_output.txt
+
+# Secrets
+.env
+
+# Misc
+*.swp

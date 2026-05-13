@@ -1,0 +1,20 @@
+[workspace]
+members = ["core/qrd-core", "core/qrd-ffi", "core/qrd-wasm", "tests/unit"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "1.0.0"
+license = "BSL-1.1"
+
+[workspace.dependencies]
+crc32fast = "1.4"
+sha2 = "0.10"
+thiserror = "1.0"
+zstd = "0.13"
+flate2 = "1.0"
+aes-gcm = "0.10"
+aes = "0.8"
+hkdf = "0.12"
+rand = "0.8"
+reed-solomon-erasure = "6.0"

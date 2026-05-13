@@ -1,0 +1,282 @@
+use sha2::{Digest, Sha256};
+use std::convert::TryFrom;
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Schema {
+    schema_version: u16,
+    fields: Vec<SchemaField>,
+}
+
+impl Schema {
+    pub fn builder() -> SchemaBuilder {
+        SchemaBuilder::new()
+    }
+
+    pub fn schema_version(&self) -> u16 {
+        self.schema_version
+    }
+
+    pub fn fields(&self) -> &[SchemaField] {
+        &self.fields
+    }
+
+    pub fn serialize_footer_schema_section(&self) -> Result<Vec<u8>, SchemaError> {
+        let payload = self.serialize_footer_schema_payload()?;
+        let payload_len = u32::try_from(payload.len()).map_err(|_| SchemaError::SectionTooLarge)?;
+
+        let mut out = Vec::with_capacity(4 + payload.len());
+        out.extend_from_slice(&payload_len.to_le_bytes());
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+
+    pub fn schema_fingerprint(&self) -> Result<[u8; 32], SchemaError> {
+        let payload = self.serialize_footer_schema_payload()?;
+        let digest = Sha256::digest(payload);
+        Ok(digest.into())
+    }
+
+    pub fn schema_id(&self) -> Result<[u8; 8], SchemaError> {
+        let fingerprint = self.schema_fingerprint()?;
+        let mut schema_id = [0u8; 8];
+        schema_id.copy_from_slice(&fingerprint[..8]);
+        Ok(schema_id)
+    }
+
+    fn serialize_footer_schema_payload(&self) -> Result<Vec<u8>, SchemaError> {
+        let field_count = u16::try_from(self.fields.len()).map_err(|_| SchemaError::TooManyFields)?;
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.schema_version.to_le_bytes());
+        out.extend_from_slice(&field_count.to_le_bytes());
+
+        for field in &self.fields {
+            field.serialize_into(&mut out)?;
+        }
+
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaBuilder {
+    schema_version: u16,
+    fields: Vec<SchemaField>,
+}
+
+impl SchemaBuilder {
+    pub fn new() -> Self {
+        Self {
+            schema_version: 1,
+            fields: Vec::new(),
+        }
+    }
+
+    pub fn schema_version(mut self, schema_version: u16) -> Self {
+        self.schema_version = schema_version;
+        self
+    }
+
+    pub fn field(mut self, field: SchemaField) -> Self {
+        self.fields.push(field);
+        self
+    }
+
+    pub fn fields(mut self, fields: impl IntoIterator<Item = SchemaField>) -> Self {
+        self.fields.extend(fields);
+        self
+    }
+
+    pub fn build(self) -> Result<Schema, SchemaError> {
+        Ok(Schema {
+            schema_version: self.schema_version,
+            fields: self.fields,
+        })
+    }
+}
+
+impl Default for SchemaBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaField {
+    pub name: String,
+    pub logical_type_id: LogicalTypeId,
+    pub nullability: Nullability,
+    pub encoding_hint: EncodingHint,
+    pub compression_hint: CompressionHint,
+    pub encryption_id: EncryptionId,
+    pub metadata: Vec<SchemaMetadataEntry>,
+}
+
+impl SchemaField {
+    pub fn new(
+        name: impl Into<String>,
+        logical_type_id: LogicalTypeId,
+        nullability: Nullability,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            logical_type_id,
+            nullability,
+            encoding_hint: EncodingHint::Plain,
+            compression_hint: CompressionHint::None,
+            encryption_id: EncryptionId::None,
+            metadata: Vec::new(),
+        }
+    }
+
+    pub fn with_encoding_hint(mut self, encoding_hint: EncodingHint) -> Self {
+        self.encoding_hint = encoding_hint;
+        self
+    }
+
+    pub fn with_compression_hint(mut self, compression_hint: CompressionHint) -> Self {
+        self.compression_hint = compression_hint;
+        self
+    }
+
+    pub fn with_encryption_id(mut self, encryption_id: EncryptionId) -> Self {
+        self.encryption_id = encryption_id;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: impl IntoIterator<Item = SchemaMetadataEntry>) -> Self {
+        self.metadata.extend(metadata);
+        self
+    }
+
+    fn serialize_into(&self, out: &mut Vec<u8>) -> Result<(), SchemaError> {
+        let name_bytes = self.name.as_bytes();
+        let name_len = u16::try_from(name_bytes.len()).map_err(|_| SchemaError::FieldNameTooLong)?;
+        let metadata_count = u16::try_from(self.metadata.len()).map_err(|_| SchemaError::TooManyMetadataEntries)?;
+
+        out.extend_from_slice(&name_len.to_le_bytes());
+        out.extend_from_slice(name_bytes);
+        out.push(self.logical_type_id as u8);
+        out.push(self.nullability as u8);
+        out.push(self.encoding_hint as u8);
+        out.push(self.compression_hint as u8);
+        out.push(self.encryption_id as u8);
+        out.extend_from_slice(&metadata_count.to_le_bytes());
+
+        for entry in &self.metadata {
+            entry.serialize_into(out)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaMetadataEntry {
+    pub key: String,
+    pub value: String,
+}
+
+impl SchemaMetadataEntry {
+    pub fn new(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
+    fn serialize_into(&self, out: &mut Vec<u8>) -> Result<(), SchemaError> {
+        let key_bytes = self.key.as_bytes();
+        let value_bytes = self.value.as_bytes();
+        let key_len = u16::try_from(key_bytes.len()).map_err(|_| SchemaError::MetadataKeyTooLong)?;
+        let value_len = u16::try_from(value_bytes.len()).map_err(|_| SchemaError::MetadataValueTooLong)?;
+
+        out.extend_from_slice(&key_len.to_le_bytes());
+        out.extend_from_slice(key_bytes);
+        out.extend_from_slice(&value_len.to_le_bytes());
+        out.extend_from_slice(value_bytes);
+        Ok(())
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalTypeId {
+    Boolean = 0x01,
+    Int8 = 0x02,
+    Int16 = 0x03,
+    Int32 = 0x04,
+    Int64 = 0x05,
+    UInt8 = 0x06,
+    UInt16 = 0x07,
+    UInt32 = 0x08,
+    UInt64 = 0x09,
+    Float32 = 0x0A,
+    Float64 = 0x0B,
+    Timestamp = 0x10,
+    Date = 0x11,
+    Time = 0x12,
+    Duration = 0x13,
+    Utf8String = 0x20,
+    Enum = 0x21,
+    Uuid = 0x22,
+    Blob = 0x23,
+    Decimal = 0x24,
+    Struct = 0x30,
+    Array = 0x31,
+    Map = 0x32,
+    Any = 0xFF,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nullability {
+    Required = 0x00,
+    Optional = 0x01,
+    Repeated = 0x02,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodingHint {
+    Plain = 0x00,
+    Rle = 0x01,
+    BitPacked = 0x02,
+    DeltaBinary = 0x03,
+    DeltaByteArray = 0x04,
+    ByteStreamSplit = 0x05,
+    DictionaryRle = 0x06,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionHint {
+    None = 0x00,
+    Zstd = 0x01,
+    Lz4Frame = 0x02,
+    Snappy = 0x03,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionId {
+    None = 0x00,
+    Aes256Gcm = 0x01,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SchemaError {
+    #[error("schema contains too many fields to fit into footer encoding")]
+    TooManyFields,
+    #[error("schema section exceeds the U32 length limit")]
+    SectionTooLarge,
+    #[error("field name exceeds the U16 length limit")]
+    FieldNameTooLong,
+    #[error("field contains too many metadata entries to fit into footer encoding")]
+    TooManyMetadataEntries,
+    #[error("metadata key exceeds the U16 length limit")]
+    MetadataKeyTooLong,
+    #[error("metadata value exceeds the U16 length limit")]
+    MetadataValueTooLong,
+}

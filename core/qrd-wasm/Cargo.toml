@@ -1,0 +1,8 @@
+[package]
+name = "qrd-wasm"
+version = "1.0.0"
+edition = "2021"
+license = "BSL-1.1"
+
+[lib]
+crate-type = ["cdylib"]

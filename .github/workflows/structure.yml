@@ -1,0 +1,41 @@
+name: Structure Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test-placement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce test file placement
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          disallowed_tests=$(rg -n '#\[test\]|#\[cfg\(test\)\]' \
+            --glob '!tests/**' \
+            --glob '!**/tests/**' \
+            --glob '!**/target/**' \
+            --glob '!**/.git/**' \
+            . || true)
+
+          if [[ -n "$disallowed_tests" ]]; then
+            echo "Found test annotations outside tests/:"
+            echo "$disallowed_tests"
+            exit 1
+          fi
+
+          if [[ ! -f tests/unit/Cargo.toml ]]; then
+            echo "Missing tests/unit/Cargo.toml"
+            exit 1
+          fi
+
+          if [[ ! -d tests/unit/tests ]]; then
+            echo "Missing tests/unit/tests directory"
+            exit 1
+          fi
